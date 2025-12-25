@@ -1,18 +1,20 @@
 import TryCatch from "../middlewares/tryCatch.js";
 import sanitize from "mongo-sanitize";
-import { registerSchema } from "../validators/user_vaildator.js";
+import { loginSchema, registerSchema } from "../validators/user_vaildator.js";
 import { fromError } from "zod-validation-error";
 import { redisClient } from "../index.js";
 import { User } from "../models/user_model.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import sendMail from "../config/sendMail.js";
-import { getVerifyEmailHtml } from "../config/html.js";
+import { getOtpHtml, getVerifyEmailHtml } from "../utils/html.js";
 
 // -----Register User-------
 
 export const registerUser = TryCatch(async (req, res) => {
+  //sanitizing input prevent sql injection
   const sanitizedBody = sanitize(req.body);
+
   const validation = registerSchema.safeParse(sanitizedBody);
 
   if (!validation.success) {
@@ -26,7 +28,7 @@ export const registerUser = TryCatch(async (req, res) => {
   const { name, email, password } = validation.data;
 
   //rate limit via ipAddress
-  const rateLimitKey = `register-rate-limit:${req.ip}:${email}`;
+  const rateLimitKey = `register-rate-limit${req.ip}:${email}`;
 
   if (await redisClient.get(rateLimitKey)) {
     return res.status(429).json({
@@ -116,4 +118,97 @@ export const verifyUser = TryCatch(async (req, res) => {
     message: "Email verified successfully, Your account has been created.",
     user: { _id: newUser._id, name: newUser.name, email: newUser.email },
   });
+});
+
+// -----Login User-------
+
+export const loginUser = TryCatch(async (req, res) => {
+  const sanitizedBody = sanitize(req.body);
+  const validation = loginSchema.safeParse(sanitizedBody);
+
+  if (!validation.success) {
+    const vaildationError = fromError(validation);
+
+    return res.status(400).json({
+      vaildationError: vaildationError.details[0].message,
+    });
+  }
+
+  const { email, password } = validation.data;
+
+  const rateLimitKey = `login-rate-limit:${req.ip}:${email}`;
+
+  if (await redisClient.get(rateLimitKey)) {
+    return res.status(429).json({
+      message: "Too Many Request, Try again after 1 min.",
+    });
+  }
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(400).json({
+      message: "Invalid credentials",
+    });
+  }
+  console.log(password);
+  console.log(user.password);
+
+  const comparePassword = await bcrypt.compare(password, user.password);
+
+  if (!comparePassword) {
+    return res.status(400).json({
+      message: "Invalid Credentials",
+    });
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+  const otpKey = `otp:${email}`;
+
+  await redisClient.set(otpKey, JSON.stringify(otp), { EX: 300 });
+
+  const html = getOtpHtml({ email, otp });
+  const subject = "Otp for verification:";
+
+  await sendMail({ email, subject, html });
+
+  await redisClient.set(rateLimitKey, "true", { EX: 60 });
+
+  res.json({
+    message: "Otp has been sent to your mail, it will expire in 5 min.",
+  });
+});
+
+// -----Verify User-------
+
+export const verifyOtp = TryCatch(async (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!otp) {
+    return res.status(400).json({
+      message: "Please provide otp.",
+    });
+  }
+
+  const otpKey = `otp:${email}`;
+  const storedOtpString = await redisClient.get(otpKey);
+
+  if (!storedOtpString) {
+    return res.status(400).json({
+      message: "Otp Expired, Click to resend otp.",
+    });
+  }
+
+  const storedOtp = JSON.parse(storedOtpString);
+
+  if (storedOtp !== otp) {
+    return res.status(400).json({
+      message: "Invaild Otp",
+    });
+  }
+
+  await redisClient.del(otpKey);
+
+  let user = await User.findOne({email});
 });
