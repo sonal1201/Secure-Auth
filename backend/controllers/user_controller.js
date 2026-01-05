@@ -8,6 +8,11 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import sendMail from "../config/sendMail.js";
 import { getOtpHtml, getVerifyEmailHtml } from "../utils/html.js";
+import {
+  generateAccessToken,
+  generateToken,
+  verifyRefreshToken,
+} from "../utils/generateToken.js";
 
 // -----Register User-------
 
@@ -151,8 +156,8 @@ export const loginUser = TryCatch(async (req, res) => {
       message: "Invalid credentials",
     });
   }
-  console.log(password);
-  console.log(user.password);
+  // console.log(password);
+  // console.log(user.password);
 
   const comparePassword = await bcrypt.compare(password, user.password);
 
@@ -210,5 +215,44 @@ export const verifyOtp = TryCatch(async (req, res) => {
 
   await redisClient.del(otpKey);
 
-  let user = await User.findOne({email});
+  let user = await User.findOne({ email });
+
+  const tokenData = await generateToken(user._id, res);
+
+  res.status(200).json({
+    message: `Welcome ${user.name}`,
+  });
+});
+
+export const myprofile = TryCatch(async (req, res) => {
+  const user = req.user;
+
+  return res.status(200).json({
+    message: "User fetched.",
+    data: user,
+  });
+});
+
+export const refreshToken = TryCatch(async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(401).json({
+      message: "Invalid refresh token",
+    });
+  }
+
+  const decode = await verifyRefreshToken(refreshToken);
+
+  if (!decode) {
+    return res.status(401).json({
+      message: "Invalid refresh token99",
+    });
+  }
+
+  generateAccessToken(decode.id, res);
+
+  res.status(200).json({
+    message: "Token refreshed",
+  });
 });

@@ -5,6 +5,7 @@ import { createClient } from "redis";
 
 // routes
 import userRoute from "./routes/user_route.js";
+import cookieParser from "cookie-parser";
 
 dotenv.config();
 await connectDb();
@@ -20,7 +21,6 @@ export const redisClient = createClient({
   url: redisUrl,
 });
 
-
 redisClient
   .connect()
   .then(() => {
@@ -33,6 +33,7 @@ const PORT = process.env.PORT;
 
 //middleware
 app.use(express.json());
+app.use(cookieParser())
 
 //using routes
 app.use("/api/v1", userRoute);
